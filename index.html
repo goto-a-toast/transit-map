@@ -314,39 +314,70 @@ const DEMO_TRAIN_LETTERS = { Ginza:'G', Marunouchi:'M', Hibiya:'H', Tozai:'T',
   Chiyoda:'C', Yurakucho:'Y', Hanzomon:'Z', Namboku:'N', Fukutoshin:'F' };
 
 /**
- * train.position : 路線上の浮動小数点位置（0 = 始発駅, n-1 = 終着駅）
- * train.velocity : 1ステップあたりの移動量（正 = 終端方向、負 = 始端方向）
+ * fromIdx → toIdx 間を progress(0-1) で補間した座標を返す
+ * 実APIモードと同じ「駅A → 駅B」セグメント方式
  */
 function getTrainInterpolatedPos(train) {
   const stations = DEMO_STATIONS[train.code];
-  const pos      = Math.max(0, Math.min(stations.length - 1, train.position));
-  const fromIdx  = Math.min(Math.floor(pos), stations.length - 2);
-  const t        = pos - fromIdx;
-  const from     = stations[fromIdx];
-  const to       = stations[fromIdx + 1];
+  const from = stations[train.fromIdx];
+  const to   = stations[train.toIdx];
+  const t    = train.progress;
   return {
-    lat:         from.lat + (to.lat - from.lat) * t,
-    lng:         from.lng + (to.lng - from.lng) * t,
-    nearStation: t < 0.5 ? from.name : to.name,
+    lat:      from.lat + (to.lat - from.lat) * t,
+    lng:      from.lng + (to.lng - from.lng) * t,
+    fromName: from.name,
+    toName:   to.name,
   };
 }
 
+function updateDemoTrainPopup(train) {
+  const line     = LINES[train.code];
+  const stations = DEMO_STATIONS[train.code];
+  const pos      = getTrainInterpolatedPos(train);
+  const destName = train.forward
+    ? stations[stations.length - 1].name
+    : stations[0].name;
+  train.marker.setPopupContent(`
+    <div style="font-size:13px;line-height:1.9;min-width:160px">
+      <b style="color:${line.color}">${line.name}</b><br>
+      列車番号: <b>${train.trainNo}</b><br>
+      現在位置: ${pos.fromName} → ${pos.toName}<br>
+      行先: ${destName}<br>
+      遅延: ${train.delay > 0 ? `<span style="color:#e00">${train.delay}秒</span>` : 'なし'}
+    </div>
+  `);
+}
+
 function advanceDemoTrain(train, dt) {
-  const maxPos = DEMO_STATIONS[train.code].length - 1;
-  train.position += train.velocity * dt / SEGMENT_DURATION_MS;
-  // 端に達したら折り返し（バウンス）
-  if (train.position >= maxPos) {
-    train.position = 2 * maxPos - train.position;
-    train.velocity = -Math.abs(train.velocity);
-  } else if (train.position <= 0) {
-    train.position = -train.position;
-    train.velocity =  Math.abs(train.velocity);
+  const stations = DEMO_STATIONS[train.code];
+  const n = stations.length;
+  train.progress += dt / (SEGMENT_DURATION_MS * train.speedFactor);
+
+  while (train.progress >= 1) {
+    train.progress -= 1;
+    // 次の区間へ進む
+    if (train.forward) {
+      train.fromIdx = train.toIdx;
+      train.toIdx   = train.fromIdx + 1;
+      if (train.toIdx >= n) {           // 終端に到達 → 折り返し
+        train.forward  = false;
+        train.toIdx    = train.fromIdx - 1;
+      }
+    } else {
+      train.fromIdx = train.toIdx;
+      train.toIdx   = train.fromIdx - 1;
+      if (train.toIdx < 0) {            // 始端に到達 → 折り返し
+        train.forward = true;
+        train.toIdx   = train.fromIdx + 1;
+      }
+    }
+    updateDemoTrainPopup(train);
   }
 }
 
 function runDemoAnimation(timestamp) {
   if (lastAnimTime === null) lastAnimTime = timestamp;
-  const dt = Math.min(timestamp - lastAnimTime, 200); // 最大200msで打ち切り（タブ復帰時の跳び防止）
+  const dt = Math.min(timestamp - lastAnimTime, 200); // タブ復帰時の跳び防止
   lastAnimTime = timestamp;
 
   for (const train of demoTrains) {
@@ -368,21 +399,28 @@ function makeDemoTrains() {
     // 各路線に 2〜3 本配置
     const count = 2 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) {
-      const position = Math.random() * (stations.length - 1);
-      const velocity = (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 0.4);
-      const destName = velocity > 0 ? stations[stations.length - 1].name : stations[0].name;
-      const trainNo  = `${letter}${String(100 + Math.floor(Math.random() * 200)).padStart(3,'0')}S`;
-      const delay    = Math.random() < 0.15 ? 60 + Math.floor(Math.random() * 120) : 0;
+      const forward = Math.random() > 0.5;
+      const n = stations.length;
+      // forward: fromIdx は 0〜n-2、backward: fromIdx は 1〜n-1
+      const fromIdx = forward
+        ? Math.floor(Math.random() * (n - 1))
+        : 1 + Math.floor(Math.random() * (n - 1));
+      const toIdx = forward ? fromIdx + 1 : fromIdx - 1;
+      const progress    = Math.random(); // 区間内のランダム初期位置
+      const speedFactor = 0.8 + Math.random() * 0.4; // ±20% の速度ばらつき
+      const trainNo     = `${letter}${String(100 + Math.floor(Math.random() * 200)).padStart(3,'0')}S`;
+      const delay       = Math.random() < 0.15 ? 60 + Math.floor(Math.random() * 120) : 0;
 
-      const train = { code, position, velocity, trainNo, delay, marker: null };
+      const train = { code, fromIdx, toIdx, forward, progress, speedFactor, trainNo, delay, marker: null };
       const pos   = getTrainInterpolatedPos(train);
+      const destName = forward ? stations[n - 1].name : stations[0].name;
 
       const marker = L.marker([pos.lat, pos.lng], { icon: createDotIcon(line.color) });
       marker.bindPopup(`
         <div style="font-size:13px;line-height:1.9;min-width:160px">
           <b style="color:${line.color}">${line.name}</b><br>
           列車番号: <b>${trainNo}</b><br>
-          現在位置: ${pos.nearStation} 付近<br>
+          現在位置: ${pos.fromName} → ${pos.toName}<br>
           行先: ${destName}<br>
           遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
         </div>
