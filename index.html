@@ -221,6 +221,12 @@ let refreshTimer  = null;
 let apiKey        = '';
 let demoTimer     = null;
 
+// アニメーション用
+const SEGMENT_DURATION_MS = 20000; // 1駅間の標準通過時間(ms)
+let demoTrains       = [];
+let animationFrameId = null;
+let lastAnimTime     = null;
+
 // ════════════════════════════════════════════════════════════
 // ユーティリティ
 // ════════════════════════════════════════════════════════════
@@ -231,6 +237,12 @@ function updateStatus(text, color = '#aaa') {
 }
 
 function clearTrainMarkers() {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+  lastAnimTime = null;
+  demoTrains = [];
   trainMarkers.forEach(m => map.removeLayer(m));
   trainMarkers = [];
 }
@@ -291,16 +303,58 @@ function drawRailwayLines() {
 }
 
 // ════════════════════════════════════════════════════════════
-// A. デモモード
+// A. デモモード（リアルタイムアニメーション）
 // ════════════════════════════════════════════════════════════
 const DEMO_TRAIN_LETTERS = { Ginza:'G', Marunouchi:'M', Hibiya:'H', Tozai:'T',
   Chiyoda:'C', Yurakucho:'Y', Hanzomon:'Z', Namboku:'N', Fukutoshin:'F' };
 
+/**
+ * train.position : 路線上の浮動小数点位置（0 = 始発駅, n-1 = 終着駅）
+ * train.velocity : 1ステップあたりの移動量（正 = 終端方向、負 = 始端方向）
+ */
+function getTrainInterpolatedPos(train) {
+  const stations = DEMO_STATIONS[train.code];
+  const pos      = Math.max(0, Math.min(stations.length - 1, train.position));
+  const fromIdx  = Math.min(Math.floor(pos), stations.length - 2);
+  const t        = pos - fromIdx;
+  const from     = stations[fromIdx];
+  const to       = stations[fromIdx + 1];
+  return {
+    lat:         from.lat + (to.lat - from.lat) * t,
+    lng:         from.lng + (to.lng - from.lng) * t,
+    nearStation: t < 0.5 ? from.name : to.name,
+  };
+}
+
+function advanceDemoTrain(train, dt) {
+  const maxPos = DEMO_STATIONS[train.code].length - 1;
+  train.position += train.velocity * dt / SEGMENT_DURATION_MS;
+  // 端に達したら折り返し（バウンス）
+  if (train.position >= maxPos) {
+    train.position = 2 * maxPos - train.position;
+    train.velocity = -Math.abs(train.velocity);
+  } else if (train.position <= 0) {
+    train.position = -train.position;
+    train.velocity =  Math.abs(train.velocity);
+  }
+}
+
+function runDemoAnimation(timestamp) {
+  if (lastAnimTime === null) lastAnimTime = timestamp;
+  const dt = Math.min(timestamp - lastAnimTime, 200); // 最大200msで打ち切り（タブ復帰時の跳び防止）
+  lastAnimTime = timestamp;
+
+  for (const train of demoTrains) {
+    advanceDemoTrain(train, dt);
+    const pos = getTrainInterpolatedPos(train);
+    train.marker.setLatLng([pos.lat, pos.lng]);
+  }
+  animationFrameId = requestAnimationFrame(runDemoAnimation);
+}
+
 function makeDemoTrains() {
   clearTrainMarkers();
   if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
-
-  const allTrains = [];
 
   for (const [code, stations] of Object.entries(DEMO_STATIONS)) {
     const line   = LINES[code];
@@ -309,33 +363,44 @@ function makeDemoTrains() {
     // 各路線に 2〜3 本配置
     const count = 2 + Math.floor(Math.random() * 2);
     for (let i = 0; i < count; i++) {
-      const idx     = Math.floor(Math.random() * stations.length);
-      const station = stations[idx];
-      const destIdx = (idx + 2 + Math.floor(Math.random() * 2)) % stations.length;
-      const dest    = stations[destIdx];
-      const trainNo = `${letter}${String(100 + Math.floor(Math.random() * 200)).padStart(3,'0')}S`;
-      const delay   = Math.random() < 0.15 ? 60 + Math.floor(Math.random() * 120) : 0;
-      allTrains.push({ code, station, dest, trainNo, delay });
+      const position = Math.random() * (stations.length - 1);
+      const velocity = (Math.random() > 0.5 ? 1 : -1) * (0.8 + Math.random() * 0.4);
+      const destName = velocity > 0 ? stations[stations.length - 1].name : stations[0].name;
+      const trainNo  = `${letter}${String(100 + Math.floor(Math.random() * 200)).padStart(3,'0')}S`;
+      const delay    = Math.random() < 0.15 ? 60 + Math.floor(Math.random() * 120) : 0;
+
+      const train = { code, position, velocity, trainNo, delay, marker: null };
+      const pos   = getTrainInterpolatedPos(train);
+
+      const marker = L.marker([pos.lat, pos.lng], { icon: createDotIcon(line.color) });
+      marker.bindPopup(`
+        <div style="font-size:13px;line-height:1.9;min-width:160px">
+          <b style="color:${line.color}">${line.name}</b><br>
+          列車番号: <b>${trainNo}</b><br>
+          現在位置: ${pos.nearStation} 付近<br>
+          行先: ${destName}<br>
+          遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
+        </div>
+      `);
+      marker.addTo(map);
+      trainMarkers.push(marker);
+      train.marker = marker;
+      demoTrains.push(train);
     }
   }
 
-  for (const t of allTrains) {
-    const line = LINES[t.code];
-    placeTrainMarker({
-      lat: t.station.lat, lng: t.station.lng,
-      lineName: line.name, lineColor: line.color,
-      trainNo: t.trainNo,
-      stationName: t.station.name,
-      destName: t.dest.name,
-      delay: t.delay,
-    });
-  }
+  // アニメーション開始
+  lastAnimTime = null;
+  animationFrameId = requestAnimationFrame(runDemoAnimation);
 
   const now = new Date().toLocaleTimeString('ja-JP');
-  updateStatus(`[デモ] ${allTrains.length}本表示中 ｜ ${now} ｜ 30秒ごとに更新`, '#7c5cbf');
+  updateStatus(`[デモ] ${demoTrains.length}本 リアルタイム走行中 ｜ ${now}`, '#7c5cbf');
 
-  // 30秒ごとに列車を再配置（移動シミュレーション）
-  demoTimer = setInterval(makeDemoTrains, 30000);
+  // ステータスを定期更新（電車は止めない）
+  demoTimer = setInterval(() => {
+    const t = new Date().toLocaleTimeString('ja-JP');
+    updateStatus(`[デモ] ${demoTrains.length}本 リアルタイム走行中 ｜ ${t}`, '#7c5cbf');
+  }, 10000);
 }
 
 function startDemo() {
