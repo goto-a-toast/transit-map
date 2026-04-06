@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>公共交通リアルタイムマップ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+
+    #header {
+      background: #1a1a2e;
+      color: white;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      z-index: 1001;
+    }
+    #header h1 { font-size: 15px; white-space: nowrap; }
+
+    #api-key-input {
+      padding: 5px 10px;
+      border-radius: 4px;
+      border: none;
+      font-size: 13px;
+      width: 280px;
+      background: #2a2a4e;
+      color: white;
+      outline: none;
+    }
+    #api-key-input::placeholder { color: #666; }
+
+    .btn {
+      padding: 5px 14px;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    #load-btn  { background: #4CAF50; }
+    #load-btn:hover  { background: #45a049; }
+    #load-btn:disabled { background: #444; cursor: default; }
+    #demo-btn  { background: #7c5cbf; }
+    #demo-btn:hover  { background: #6a4fac; }
+
+    #status { margin-left: auto; font-size: 12px; color: #aaa; white-space: nowrap; }
+
+    #map { flex: 1; }
+
+    #legend {
+      position: absolute;
+      bottom: 28px;
+      right: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.95);
+      padding: 10px 14px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .legend-title { font-weight: bold; margin-bottom: 4px; font-size: 13px; }
+    .legend-item  { display: flex; align-items: center; gap: 7px; }
+    .legend-line  { width: 18px; height: 4px; border-radius: 2px; flex-shrink: 0; }
+    .legend-dot   { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 2px solid white; box-shadow: 0 0 0 1px #aaa; }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🚆 公共交通リアルタイムマップ</h1>
+  <input id="api-key-input" type="text" placeholder="ODPTのAPIキーを入力" />
+  <button id="load-btn" class="btn" onclick="loadData()">読み込む</button>
+  <button id="demo-btn" class="btn" onclick="startDemo()">デモモード</button>
+  <span id="status">路線データ読み込み中...</span>
+</div>
+
+<div id="map"></div>
+<div id="legend"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ════════════════════════════════════════════════════════════
+// 路線定義（ODPTコード → 表示名・色・OSM ref）
+// ════════════════════════════════════════════════════════════
+const LINES = {
+  Ginza:      { name: '銀座線',   color: '#F39700', ref: 'G' },
+  Marunouchi: { name: '丸ノ内線', color: '#E60012', ref: 'M' },
+  Hibiya:     { name: '日比谷線', color: '#9C9C9C', ref: 'H' },
+  Tozai:      { name: '東西線',   color: '#009BBF', ref: 'T' },
+  Chiyoda:    { name: '千代田線', color: '#00BB85', ref: 'C' },
+  Yurakucho:  { name: '有楽町線', color: '#C1A000', ref: 'Y' },
+  Hanzomon:   { name: '半蔵門線', color: '#8F76D6', ref: 'Z' },
+  Namboku:    { name: '南北線',   color: '#00AC9B', ref: 'N' },
+  Fukutoshin: { name: '副都心線', color: '#9C5E31', ref: 'F' },
+};
+
+// OSM ref → LINES key
+const REF_TO_CODE = Object.fromEntries(
+  Object.entries(LINES).map(([k, v]) => [v.ref, k])
+);
+
+// ════════════════════════════════════════════════════════════
+// 駅データ（路線ライン描画 ＋ デモモードで共用）
+// 各路線の駅を実際の順序・座標で並べる
+// ════════════════════════════════════════════════════════════
+const DEMO_STATIONS = {
+  Ginza: [
+    { name: '渋谷',     lat: 35.6583, lng: 139.7016 },
+    { name: '表参道',   lat: 35.6654, lng: 139.7124 },
+    { name: '青山一丁目', lat: 35.6726, lng: 139.7147 },
+    { name: '赤坂見附', lat: 35.6797, lng: 139.7363 },
+    { name: '虎ノ門',   lat: 35.6677, lng: 139.7490 },
+    { name: '新橋',     lat: 35.6658, lng: 139.7579 },
+    { name: '銀座',     lat: 35.6715, lng: 139.7649 },
+    { name: '日本橋',   lat: 35.6821, lng: 139.7742 },
+    { name: '神田',     lat: 35.6919, lng: 139.7706 },
+    { name: '上野',     lat: 35.7136, lng: 139.7772 },
+    { name: '浅草',     lat: 35.7116, lng: 139.7971 },
+  ],
+  Marunouchi: [
+    { name: '荻窪',     lat: 35.7058, lng: 139.6193 },
+    { name: '南阿佐ケ谷', lat: 35.7038, lng: 139.6397 },
+    { name: '新高円寺', lat: 35.7046, lng: 139.6524 },
+    { name: '新中野',   lat: 35.7025, lng: 139.6680 },
+    { name: '中野坂上', lat: 35.7017, lng: 139.6658 },
+    { name: '新宿',     lat: 35.6896, lng: 139.7006 },
+    { name: '四谷',     lat: 35.6874, lng: 139.7302 },
+    { name: '赤坂見附', lat: 35.6797, lng: 139.7363 },
+    { name: '国会議事堂前', lat: 35.6746, lng: 139.7430 },
+    { name: '銀座',     lat: 35.6714, lng: 139.7648 },
+    { name: '東京',     lat: 35.6813, lng: 139.7671 },
+    { name: '大手町',   lat: 35.6843, lng: 139.7627 },
+    { name: '御茶ノ水', lat: 35.6980, lng: 139.7657 },
+    { name: '後楽園',   lat: 35.7074, lng: 139.7516 },
+    { name: '茗荷谷',   lat: 35.7209, lng: 139.7294 },
+    { name: '池袋',     lat: 35.7295, lng: 139.7109 },
+  ],
+  Hibiya: [
+    { name: '中目黒',   lat: 35.6441, lng: 139.6988 },
+    { name: '恵比寿',   lat: 35.6470, lng: 139.7103 },
+    { name: '広尾',     lat: 35.6520, lng: 139.7215 },
+    { name: '六本木',   lat: 35.6627, lng: 139.7311 },
+    { name: '銀座',     lat: 35.6714, lng: 139.7647 },
+    { name: '秋葉原',   lat: 35.6983, lng: 139.7731 },
+    { name: '北千住',   lat: 35.7489, lng: 139.8002 },
+  ],
+  Tozai: [
+    { name: '中野',     lat: 35.7075, lng: 139.6641 },
+    { name: '高田馬場', lat: 35.7124, lng: 139.7039 },
+    { name: '飯田橋',   lat: 35.7020, lng: 139.7487 },
+    { name: '大手町',   lat: 35.6843, lng: 139.7625 },
+    { name: '茅場町',   lat: 35.6796, lng: 139.7796 },
+    { name: '木場',     lat: 35.6717, lng: 139.8038 },
+    { name: '西船橋',   lat: 35.7034, lng: 139.9483 },
+  ],
+  Chiyoda: [
+    { name: '代々木上原', lat: 35.6620, lng: 139.6858 },
+    { name: '表参道',   lat: 35.6653, lng: 139.7123 },
+    { name: '国会議事堂前', lat: 35.6746, lng: 139.7430 },
+    { name: '大手町',   lat: 35.6843, lng: 139.7627 },
+    { name: '北千住',   lat: 35.7489, lng: 139.8002 },
+    { name: '綾瀬',     lat: 35.7596, lng: 139.8247 },
+  ],
+  Yurakucho: [
+    { name: '和光市',   lat: 35.7843, lng: 139.6066 },
+    { name: '小竹向原', lat: 35.7419, lng: 139.6756 },
+    { name: '池袋',     lat: 35.7295, lng: 139.7109 },
+    { name: '飯田橋',   lat: 35.7020, lng: 139.7487 },
+    { name: '有楽町',   lat: 35.6749, lng: 139.7630 },
+    { name: '新木場',   lat: 35.6325, lng: 139.8232 },
+  ],
+  Hanzomon: [
+    { name: '渋谷',     lat: 35.6580, lng: 139.7025 },
+    { name: '表参道',   lat: 35.6654, lng: 139.7124 },
+    { name: '半蔵門',   lat: 35.6838, lng: 139.7450 },
+    { name: '大手町',   lat: 35.6843, lng: 139.7627 },
+    { name: '水天宮前', lat: 35.6799, lng: 139.7855 },
+    { name: '押上',     lat: 35.7102, lng: 139.8014 },
+  ],
+  Namboku: [
+    { name: '目黒',     lat: 35.6333, lng: 139.7158 },
+    { name: '白金台',   lat: 35.6390, lng: 139.7247 },
+    { name: '麻布十番', lat: 35.6543, lng: 139.7374 },
+    { name: '溜池山王', lat: 35.6742, lng: 139.7424 },
+    { name: '永田町',   lat: 35.6783, lng: 139.7427 },
+    { name: '後楽園',   lat: 35.7074, lng: 139.7516 },
+    { name: '駒込',     lat: 35.7365, lng: 139.7483 },
+    { name: '王子',     lat: 35.7516, lng: 139.7374 },
+    { name: '赤羽岩淵', lat: 35.7794, lng: 139.7238 },
+  ],
+  Fukutoshin: [
+    { name: '和光市',   lat: 35.7843, lng: 139.6066 },
+    { name: '小竹向原', lat: 35.7419, lng: 139.6756 },
+    { name: '池袋',     lat: 35.7295, lng: 139.7109 },
+    { name: '新宿三丁目', lat: 35.6882, lng: 139.7068 },
+    { name: '渋谷',     lat: 35.6580, lng: 139.7025 },
+  ],
+};
+
+// ════════════════════════════════════════════════════════════
+// マップ初期化
+// ════════════════════════════════════════════════════════════
+const map = L.map('map').setView([35.685, 139.753], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19,
+}).addTo(map);
+
+// ════════════════════════════════════════════════════════════
+// 状態
+// ════════════════════════════════════════════════════════════
+let trainMarkers = [];
+let railwayLayers = [];
+let refreshTimer  = null;
+let apiKey        = '';
+let demoTimer     = null;
+
+// ════════════════════════════════════════════════════════════
+// ユーティリティ
+// ════════════════════════════════════════════════════════════
+function updateStatus(text, color = '#aaa') {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.style.color = color;
+}
+
+function clearTrainMarkers() {
+  trainMarkers.forEach(m => map.removeLayer(m));
+  trainMarkers = [];
+}
+
+function getLineCode(odptId) {
+  const m = odptId.match(/TokyoMetro\.(\w+)\./);
+  return m ? m[1] : null;
+}
+
+function createDotIcon(color) {
+  return L.divIcon({
+    html: `<div style="
+      width:14px; height:14px; border-radius:50%;
+      background:${color}; border:2.5px solid white;
+      box-shadow:0 1px 5px rgba(0,0,0,0.5);
+    "></div>`,
+    className: '',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [0, -10],
+  });
+}
+
+function placeTrainMarker({ lat, lng, lineName, lineColor, trainNo, stationName, destName, delay }) {
+  const marker = L.marker([lat, lng], { icon: createDotIcon(lineColor) });
+  marker.bindPopup(`
+    <div style="font-size:13px;line-height:1.9;min-width:160px">
+      <b style="color:${lineColor}">${lineName}</b><br>
+      列車番号: <b>${trainNo}</b><br>
+      現在位置: ${stationName}<br>
+      行先: ${destName}<br>
+      遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
+    </div>
+  `);
+  marker.addTo(map);
+  trainMarkers.push(marker);
+}
+
+// ════════════════════════════════════════════════════════════
+// B. 路線ラインを描画（DEMO_STATIONS の座標を順につなぐ）
+// ════════════════════════════════════════════════════════════
+function drawRailwayLines() {
+  railwayLayers.forEach(l => map.removeLayer(l));
+  railwayLayers = [];
+
+  for (const [code, stations] of Object.entries(DEMO_STATIONS)) {
+    const color   = LINES[code].color;
+    const latlngs = stations.map(s => [s.lat, s.lng]);
+    const poly = L.polyline(latlngs, {
+      color,
+      weight: 4,
+      opacity: 0.75,
+    }).addTo(map);
+    railwayLayers.push(poly);
+  }
+
+  updateStatus('APIキーを入力するか「デモモード」を押してください');
+}
+
+// ════════════════════════════════════════════════════════════
+// A. デモモード
+// ════════════════════════════════════════════════════════════
+const DEMO_TRAIN_LETTERS = { Ginza:'G', Marunouchi:'M', Hibiya:'H', Tozai:'T',
+  Chiyoda:'C', Yurakucho:'Y', Hanzomon:'Z', Namboku:'N', Fukutoshin:'F' };
+
+function makeDemoTrains() {
+  clearTrainMarkers();
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+
+  const allTrains = [];
+
+  for (const [code, stations] of Object.entries(DEMO_STATIONS)) {
+    const line   = LINES[code];
+    const letter = DEMO_TRAIN_LETTERS[code];
+
+    // 各路線に 2〜3 本配置
+    const count = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < count; i++) {
+      const idx     = Math.floor(Math.random() * stations.length);
+      const station = stations[idx];
+      const destIdx = (idx + 2 + Math.floor(Math.random() * 2)) % stations.length;
+      const dest    = stations[destIdx];
+      const trainNo = `${letter}${String(100 + Math.floor(Math.random() * 200)).padStart(3,'0')}S`;
+      const delay   = Math.random() < 0.15 ? 60 + Math.floor(Math.random() * 120) : 0;
+      allTrains.push({ code, station, dest, trainNo, delay });
+    }
+  }
+
+  for (const t of allTrains) {
+    const line = LINES[t.code];
+    placeTrainMarker({
+      lat: t.station.lat, lng: t.station.lng,
+      lineName: line.name, lineColor: line.color,
+      trainNo: t.trainNo,
+      stationName: t.station.name,
+      destName: t.dest.name,
+      delay: t.delay,
+    });
+  }
+
+  const now = new Date().toLocaleTimeString('ja-JP');
+  updateStatus(`[デモ] ${allTrains.length}本表示中 ｜ ${now} ｜ 30秒ごとに更新`, '#7c5cbf');
+
+  // 30秒ごとに列車を再配置（移動シミュレーション）
+  demoTimer = setInterval(makeDemoTrains, 30000);
+}
+
+function startDemo() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  document.getElementById('load-btn').disabled = false;
+  document.getElementById('load-btn').textContent = '読み込む';
+  apiKey = '';
+  makeDemoTrains();
+}
+
+// ════════════════════════════════════════════════════════════
+// ODPT API（実データ）
+// ════════════════════════════════════════════════════════════
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+async function fetchStations(key) {
+  const data = await fetchJSON(
+    `https://api.odpt.org/api/v4/odpt:Station?odpt:operator=odpt.Operator:TokyoMetro&acl:consumerKey=${encodeURIComponent(key)}`
+  );
+  const result = {};
+  for (const s of data) {
+    const id  = s['owl:sameAs'];
+    const lat = s['geo:lat'];
+    const lng = s['geo:long'];
+    if (id && lat != null && lng != null) {
+      result[id] = { lat, lng, name: s['dc:title'] || id.split('.').pop() };
+    }
+  }
+  return result;
+}
+
+async function fetchTrains(key) {
+  return fetchJSON(
+    `https://api.odpt.org/api/v4/odpt:Train?odpt:operator=odpt.Operator:TokyoMetro&acl:consumerKey=${encodeURIComponent(key)}`
+  );
+}
+
+async function refresh(stationMap) {
+  try {
+    const trains = await fetchTrains(apiKey);
+    clearTrainMarkers();
+    let count = 0;
+
+    for (const train of trains) {
+      const stationId = train['odpt:fromStation'] || train['odpt:toStation'];
+      if (!stationId) continue;
+      const station = stationMap[stationId];
+      if (!station) continue;
+
+      const code    = getLineCode(train['owl:sameAs'] || '');
+      const line    = LINES[code] || { name: code || '不明', color: '#666' };
+      const delay   = train['odpt:delay'] || 0;
+      const trainNo = train['odpt:trainNumber'] || '不明';
+      const destArr = train['odpt:destinationStation'];
+      const destId  = destArr?.at(-1);
+      const destName = destId ? (stationMap[destId]?.name || destId.split('.').pop()) : '不明';
+
+      placeTrainMarker({
+        lat: station.lat, lng: station.lng,
+        lineName: line.name, lineColor: line.color,
+        trainNo, stationName: station.name, destName, delay,
+      });
+      count++;
+    }
+
+    const now = new Date().toLocaleTimeString('ja-JP');
+    updateStatus(`${count}本運行中 ｜ 最終更新: ${now}`, '#4CAF50');
+  } catch (e) {
+    updateStatus('取得エラー: ' + e.message, '#FF5555');
+    console.error(e);
+  }
+}
+
+async function loadData() {
+  apiKey = document.getElementById('api-key-input').value.trim();
+  if (!apiKey) {
+    updateStatus('APIキーを入力してください', '#FF9500');
+    return;
+  }
+  // デモ停止
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  clearTrainMarkers();
+
+  const btn = document.getElementById('load-btn');
+  btn.disabled = true;
+  updateStatus('駅データ取得中...', '#4CAF50');
+
+  try {
+    const stationMap = await fetchStations(apiKey);
+    updateStatus('列車データ取得中...', '#4CAF50');
+    await refresh(stationMap);
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(() => refresh(stationMap), 30000);
+    btn.textContent = '更新中(30s)';
+  } catch (e) {
+    updateStatus('エラー: ' + e.message, '#FF5555');
+    console.error(e);
+    btn.disabled = false;
+    btn.textContent = '読み込む';
+  }
+}
+
+document.getElementById('api-key-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadData();
+});
+
+// ════════════════════════════════════════════════════════════
+// 凡例
+// ════════════════════════════════════════════════════════════
+const legendEl = document.getElementById('legend');
+legendEl.innerHTML =
+  `<div class="legend-title">東京メトロ</div>` +
+  Object.values(LINES).map(l =>
+    `<div class="legend-item">
+      <div class="legend-line" style="background:${l.color}"></div>
+      ${l.name}
+    </div>`
+  ).join('');
+
+// ════════════════════════════════════════════════════════════
+// 起動時に路線ラインを描画
+// ════════════════════════════════════════════════════════════
+drawRailwayLines();
+</script>
+</body>
+</html>
