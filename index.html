@@ -221,11 +221,16 @@ let refreshTimer  = null;
 let apiKey        = '';
 let demoTimer     = null;
 
-// アニメーション用
+// デモアニメーション用
 const SEGMENT_DURATION_MS = 20000; // 1駅間の標準通過時間(ms)
 let demoTrains       = [];
 let animationFrameId = null;
 let lastAnimTime     = null;
+
+// 実データアニメーション用
+let realTrains        = new Map(); // trainNo → state
+let realAnimFrameId   = null;
+let realLastAnimTime  = null;
 
 // ════════════════════════════════════════════════════════════
 // ユーティリティ
@@ -237,12 +242,12 @@ function updateStatus(text, color = '#aaa') {
 }
 
 function clearTrainMarkers() {
-  if (animationFrameId) {
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
-  }
+  if (animationFrameId) { cancelAnimationFrame(animationFrameId); animationFrameId = null; }
   lastAnimTime = null;
   demoTrains = [];
+  if (realAnimFrameId) { cancelAnimationFrame(realAnimFrameId); realAnimFrameId = null; }
+  realLastAnimTime = null;
+  realTrains.clear();
   trainMarkers.forEach(m => map.removeLayer(m));
   trainMarkers = [];
 }
@@ -442,17 +447,32 @@ async function fetchTrains(key) {
   );
 }
 
+// 実データ用アニメーションループ（fromStation→toStation を30秒かけて移動）
+function runRealAnimation(timestamp) {
+  if (realLastAnimTime === null) realLastAnimTime = timestamp;
+  const dt = Math.min(timestamp - realLastAnimTime, 200);
+  realLastAnimTime = timestamp;
+  for (const [, t] of realTrains) {
+    t.progress = Math.min(1, t.progress + dt / 30000);
+    const lat = t.fromLat + (t.toLat - t.fromLat) * t.progress;
+    const lng = t.fromLng + (t.toLng - t.fromLng) * t.progress;
+    t.marker.setLatLng([lat, lng]);
+  }
+  realAnimFrameId = requestAnimationFrame(runRealAnimation);
+}
+
 async function refresh(stationMap) {
   try {
     const trains = await fetchTrains(apiKey);
-    clearTrainMarkers();
-    let count = 0;
+    const activeNos = new Set();
 
     for (const train of trains) {
-      const stationId = train['odpt:fromStation'] || train['odpt:toStation'];
-      if (!stationId) continue;
-      const station = stationMap[stationId];
-      if (!station) continue;
+      const fromId = train['odpt:fromStation'];
+      const toId   = train['odpt:toStation'];
+      if (!fromId && !toId) continue;
+      const fromSt = fromId ? stationMap[fromId] : null;
+      const toSt   = toId   ? stationMap[toId]   : null;
+      if (!fromSt && !toSt) continue;
 
       const code    = getLineCode(train['owl:sameAs'] || '');
       const line    = LINES[code] || { name: code || '不明', color: '#666' };
@@ -462,16 +482,55 @@ async function refresh(stationMap) {
       const destId  = destArr?.at(-1);
       const destName = destId ? (stationMap[destId]?.name || destId.split('.').pop()) : '不明';
 
-      placeTrainMarker({
-        lat: station.lat, lng: station.lng,
-        lineName: line.name, lineColor: line.color,
-        trainNo, stationName: station.name, destName, delay,
-      });
-      count++;
+      const fromLat = (fromSt || toSt).lat, fromLng = (fromSt || toSt).lng;
+      const toLat   = (toSt   || fromSt).lat, toLng   = (toSt   || fromSt).lng;
+      const nearName = fromSt ? fromSt.name : toSt.name;
+      const toName   = toSt   ? toSt.name   : nearName;
+
+      activeNos.add(trainNo);
+      const existing = realTrains.get(trainNo);
+
+      if (existing && existing.fromId === fromId) {
+        // 同じ駅間 → 進行を継続、行先だけ更新
+        existing.toLat = toLat; existing.toLng = toLng;
+      } else {
+        // 新しい区間 or 新規列車 → マーカーを作り直す
+        if (existing) {
+          map.removeLayer(existing.marker);
+          trainMarkers = trainMarkers.filter(m => m !== existing.marker);
+        }
+        const marker = L.marker([fromLat, fromLng], { icon: createDotIcon(line.color) });
+        marker.bindPopup(`
+          <div style="font-size:13px;line-height:1.9;min-width:160px">
+            <b style="color:${line.color}">${line.name}</b><br>
+            列車番号: <b>${trainNo}</b><br>
+            現在位置: ${nearName} → ${toName}<br>
+            行先: ${destName}<br>
+            遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
+          </div>
+        `);
+        marker.addTo(map);
+        trainMarkers.push(marker);
+        realTrains.set(trainNo, { marker, fromId, fromLat, fromLng, toLat, toLng, progress: 0 });
+      }
     }
 
+    // 消えた列車を除去
+    for (const [no, t] of realTrains) {
+      if (!activeNos.has(no)) {
+        map.removeLayer(t.marker);
+        trainMarkers = trainMarkers.filter(m => m !== t.marker);
+        realTrains.delete(no);
+      }
+    }
+
+    // アニメーション再起動
+    if (realAnimFrameId) { cancelAnimationFrame(realAnimFrameId); realAnimFrameId = null; }
+    realLastAnimTime = null;
+    realAnimFrameId = requestAnimationFrame(runRealAnimation);
+
     const now = new Date().toLocaleTimeString('ja-JP');
-    updateStatus(`${count}本運行中 ｜ 最終更新: ${now}`, '#4CAF50');
+    updateStatus(`${realTrains.size}本運行中 ｜ 最終更新: ${now}`, '#4CAF50');
   } catch (e) {
     updateStatus('取得エラー: ' + e.message, '#FF5555');
     console.error(e);
