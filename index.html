@@ -89,6 +89,7 @@
 // 路線定義（ODPTコード → 表示名・色・OSM ref）
 // ════════════════════════════════════════════════════════════
 const LINES = {
+  // 東京メトロ
   Ginza:      { name: '銀座線',   color: '#F39700', ref: 'G' },
   Marunouchi: { name: '丸ノ内線', color: '#E60012', ref: 'M' },
   Hibiya:     { name: '日比谷線', color: '#9C9C9C', ref: 'H' },
@@ -98,6 +99,14 @@ const LINES = {
   Hanzomon:   { name: '半蔵門線', color: '#8F76D6', ref: 'Z' },
   Namboku:    { name: '南北線',   color: '#00AC9B', ref: 'N' },
   Fukutoshin: { name: '副都心線', color: '#9C5E31', ref: 'F' },
+  // 都営地下鉄
+  'Toei.Asakusa': { name: '都営浅草線',   color: '#E5171F', ref: 'A' },
+  'Toei.Mita':    { name: '都営三田線',   color: '#0079C2', ref: 'I' },
+  'Toei.Shinjuku':{ name: '都営新宿線',   color: '#6CBB5A', ref: 'S' },
+  'Toei.Oedo':    { name: '都営大江戸線', color: '#B6007A', ref: 'E' },
+  // 横浜市営地下鉄
+  'YokohamaMunicipal.Blue':  { name: '横浜ブルーライン',  color: '#2B7BB9', ref: 'YB' },
+  'YokohamaMunicipal.Green': { name: '横浜グリーンライン', color: '#009B74', ref: 'YG' },
 };
 
 // OSM ref → LINES key
@@ -253,8 +262,10 @@ function clearTrainMarkers() {
 }
 
 function getLineCode(odptId) {
-  const m = odptId.match(/TokyoMetro\.(\w+)\./);
-  return m ? m[1] : null;
+  const m = odptId.match(/odpt\.Train:(\w+)\.(\w+)\./);
+  if (!m) return null;
+  const [, operator, line] = m;
+  return operator === 'TokyoMetro' ? line : `${operator}.${line}`;
 }
 
 function createDotIcon(color) {
@@ -464,22 +475,25 @@ async function fetchJSON(url) {
 }
 
 async function fetchStations(key) {
-  const data = await fetchJSON(
-    `https://api.odpt.org/api/v4/odpt:Station?odpt:operator=odpt.Operator:TokyoMetro&acl:consumerKey=${encodeURIComponent(key)}`
+  const operators = ['TokyoMetro', 'Toei', 'YokohamaMunicipal'];
+  const responses = await Promise.allSettled(
+    operators.map(op =>
+      fetchJSON(`https://api.odpt.org/api/v4/odpt:Station?odpt:operator=odpt.Operator:${op}&acl:consumerKey=${encodeURIComponent(key)}`)
+    )
   );
   const result = {};
-  for (const s of data) {
-    const id  = s['owl:sameAs'];
-    const lat = s['geo:lat'];
-    const lng = s['geo:long'];
-    if (id && lat != null && lng != null) {
-      result[id] = { lat, lng, name: s['dc:title'] || id.split('.').pop() };
+  for (const res of responses) {
+    if (res.status !== 'fulfilled') continue;
+    for (const s of res.value) {
+      const id  = s['owl:sameAs'];
+      const lat = s['geo:lat'];
+      const lng = s['geo:long'];
+      if (id && lat != null && lng != null) {
+        result[id] = { lat, lng, name: s['dc:title'] || id.split('.').pop() };
+      }
     }
   }
-  console.log(`[ODPT] 駅データ: API=${data.length}件, 座標あり=${Object.keys(result).length}件`);
-  if (Object.keys(result).length === 0 && data.length > 0) {
-    console.warn('[ODPT] 駅データに座標(geo:lat/geo:long)が含まれていません。APIレスポンス例:', data[0]);
-  }
+  console.log(`[ODPT] 駅データ: 座標あり=${Object.keys(result).length}件`);
   return result;
 }
 
