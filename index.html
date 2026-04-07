@@ -215,7 +215,7 @@ const DEMO_STATIONS = {
 // ════════════════════════════════════════════════════════════
 // マップ初期化
 // ════════════════════════════════════════════════════════════
-const map = L.map('map').setView([35.685, 139.753], 12);
+const map = L.map('map').setView([35.60, 139.70], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19,
@@ -474,6 +474,53 @@ async function fetchJSON(url) {
   return res.json();
 }
 
+async function fetchRailways(key) {
+  const operators = ['TokyoMetro', 'Toei', 'YokohamaMunicipal'];
+  const responses = await Promise.allSettled(
+    operators.map(op =>
+      fetchJSON(`https://api.odpt.org/api/v4/odpt:Railway?odpt:operator=odpt.Operator:${op}&acl:consumerKey=${encodeURIComponent(key)}`)
+    )
+  );
+  const result = [];
+  for (const res of responses) {
+    if (res.status === 'fulfilled') result.push(...res.value);
+  }
+  return result;
+}
+
+function drawRealRailwayLines(railways, stationMap) {
+  railwayLayers.forEach(l => map.removeLayer(l));
+  railwayLayers = [];
+
+  for (const railway of railways) {
+    const rwId = railway['owl:sameAs'] || '';
+    // odpt.Railway:Toei.Asakusa → Toei.Asakusa
+    const m = rwId.match(/odpt\.Railway:(?:TokyoMetro\.(\w+)|(\w+)\.(\w+))/);
+    if (!m) continue;
+    const code = m[1] || `${m[2]}.${m[3]}`;
+    const line = LINES[code];
+    if (!line) continue;
+
+    const order = railway['odpt:stationOrder'];
+    if (!Array.isArray(order)) continue;
+
+    const latlngs = order
+      .sort((a, b) => (a['odpt:index'] || 0) - (b['odpt:index'] || 0))
+      .map(entry => stationMap[entry['odpt:station']])
+      .filter(Boolean)
+      .map(s => [s.lat, s.lng]);
+
+    if (latlngs.length < 2) continue;
+
+    const poly = L.polyline(latlngs, {
+      color: line.color,
+      weight: 4,
+      opacity: 0.75,
+    }).addTo(map);
+    railwayLayers.push(poly);
+  }
+}
+
 async function fetchStations(key) {
   const operators = ['TokyoMetro', 'Toei', 'YokohamaMunicipal'];
   const responses = await Promise.allSettled(
@@ -623,12 +670,18 @@ async function loadData() {
   updateStatus('駅データ取得中...', '#4CAF50');
 
   try {
-    const stationMap = await fetchStations(apiKey);
+    const [stationMap, railways] = await Promise.all([
+      fetchStations(apiKey),
+      fetchRailways(apiKey),
+    ]);
     if (Object.keys(stationMap).length === 0) {
       updateStatus('駅データが取得できませんでした。APIキーを確認してください', '#FF5555');
       btn.disabled = false;
       btn.textContent = '読み込む';
       return;
+    }
+    if (railways.length > 0) {
+      drawRealRailwayLines(railways, stationMap);
     }
     updateStatus('列車データ取得中...', '#4CAF50');
     await refresh(stationMap);
@@ -651,14 +704,18 @@ document.getElementById('api-key-input').addEventListener('keydown', e => {
 // 凡例
 // ════════════════════════════════════════════════════════════
 const legendEl = document.getElementById('legend');
-legendEl.innerHTML =
-  `<div class="legend-title">東京メトロ</div>` +
-  Object.values(LINES).map(l =>
-    `<div class="legend-item">
-      <div class="legend-line" style="background:${l.color}"></div>
-      ${l.name}
-    </div>`
-  ).join('');
+const legendGroups = [
+  { title: '東京メトロ', keys: ['Ginza','Marunouchi','Hibiya','Tozai','Chiyoda','Yurakucho','Hanzomon','Namboku','Fukutoshin'] },
+  { title: '都営地下鉄', keys: ['Toei.Asakusa','Toei.Mita','Toei.Shinjuku','Toei.Oedo'] },
+  { title: '横浜市営地下鉄', keys: ['YokohamaMunicipal.Blue','YokohamaMunicipal.Green'] },
+];
+legendEl.innerHTML = legendGroups.map(g =>
+  `<div class="legend-title">${g.title}</div>` +
+  g.keys.map(k => {
+    const l = LINES[k];
+    return l ? `<div class="legend-item"><div class="legend-line" style="background:${l.color}"></div>${l.name}</div>` : '';
+  }).join('')
+).join('');
 
 // ════════════════════════════════════════════════════════════
 // 起動時に路線ラインを描画
