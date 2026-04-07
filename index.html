@@ -20,34 +20,6 @@
       z-index: 1001;
     }
     #header h1 { font-size: 15px; white-space: nowrap; }
-
-    #api-key-input {
-      padding: 5px 10px;
-      border-radius: 4px;
-      border: none;
-      font-size: 13px;
-      width: 280px;
-      background: #2a2a4e;
-      color: white;
-      outline: none;
-    }
-    #api-key-input::placeholder { color: #666; }
-
-    .btn {
-      padding: 5px 14px;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 13px;
-      white-space: nowrap;
-    }
-    #load-btn  { background: #4CAF50; }
-    #load-btn:hover  { background: #45a049; }
-    #load-btn:disabled { background: #444; cursor: default; }
-    #demo-btn  { background: #7c5cbf; }
-    #demo-btn:hover  { background: #6a4fac; }
-
     #status { margin-left: auto; font-size: 12px; color: #aaa; white-space: nowrap; }
 
     #map { flex: 1; }
@@ -64,20 +36,17 @@
       font-size: 12px;
       line-height: 1.7;
     }
-    .legend-title { font-weight: bold; margin-bottom: 4px; font-size: 13px; }
+    .legend-title { font-weight: bold; margin-bottom: 4px; font-size: 13px; margin-top: 8px; }
+    .legend-title:first-child { margin-top: 0; }
     .legend-item  { display: flex; align-items: center; gap: 7px; }
     .legend-line  { width: 18px; height: 4px; border-radius: 2px; flex-shrink: 0; }
-    .legend-dot   { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 2px solid white; box-shadow: 0 0 0 1px #aaa; }
   </style>
 </head>
 <body>
 
 <div id="header">
   <h1>🚆 公共交通リアルタイムマップ</h1>
-  <input id="api-key-input" type="text" placeholder="ODPTのAPIキーを入力" />
-  <button id="load-btn" class="btn" onclick="loadData()">読み込む</button>
-  <button id="demo-btn" class="btn" onclick="startDemo()">デモモード</button>
-  <span id="status">路線データ読み込み中...</span>
+  <span id="status">読み込み中...</span>
 </div>
 
 <div id="map"></div>
@@ -86,130 +55,17 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // ════════════════════════════════════════════════════════════
-// 路線定義（ODPTコード → 表示名・色・OSM ref）
+// 路線定義（ODPTコード → 表示名・色）
 // ════════════════════════════════════════════════════════════
 const LINES = {
-  // 東京メトロ
-  Ginza:      { name: '銀座線',   color: '#F39700', ref: 'G' },
-  Marunouchi: { name: '丸ノ内線', color: '#E60012', ref: 'M' },
-  Hibiya:     { name: '日比谷線', color: '#9C9C9C', ref: 'H' },
-  Tozai:      { name: '東西線',   color: '#009BBF', ref: 'T' },
-  Chiyoda:    { name: '千代田線', color: '#00BB85', ref: 'C' },
-  Yurakucho:  { name: '有楽町線', color: '#C1A000', ref: 'Y' },
-  Hanzomon:   { name: '半蔵門線', color: '#8F76D6', ref: 'Z' },
-  Namboku:    { name: '南北線',   color: '#00AC9B', ref: 'N' },
-  Fukutoshin: { name: '副都心線', color: '#9C5E31', ref: 'F' },
   // 都営地下鉄
-  'Toei.Asakusa': { name: '都営浅草線',   color: '#E5171F', ref: 'A' },
-  'Toei.Mita':    { name: '都営三田線',   color: '#0079C2', ref: 'I' },
-  'Toei.Shinjuku':{ name: '都営新宿線',   color: '#6CBB5A', ref: 'S' },
-  'Toei.Oedo':    { name: '都営大江戸線', color: '#B6007A', ref: 'E' },
+  'Toei.Asakusa':  { name: '都営浅草線',    color: '#E5171F' },
+  'Toei.Mita':     { name: '都営三田線',    color: '#0079C2' },
+  'Toei.Shinjuku': { name: '都営新宿線',    color: '#6CBB5A' },
+  'Toei.Oedo':     { name: '都営大江戸線',  color: '#B6007A' },
   // 横浜市営地下鉄
-  'YokohamaMunicipal.Blue':  { name: '横浜ブルーライン',  color: '#2B7BB9', ref: 'YB' },
-  'YokohamaMunicipal.Green': { name: '横浜グリーンライン', color: '#009B74', ref: 'YG' },
-};
-
-// OSM ref → LINES key
-const REF_TO_CODE = Object.fromEntries(
-  Object.entries(LINES).map(([k, v]) => [v.ref, k])
-);
-
-// ════════════════════════════════════════════════════════════
-// 駅データ（路線ライン描画 ＋ デモモードで共用）
-// 各路線の駅を実際の順序・座標で並べる
-// ════════════════════════════════════════════════════════════
-const DEMO_STATIONS = {
-  Ginza: [
-    { name: '渋谷',     lat: 35.6583, lng: 139.7016 },
-    { name: '表参道',   lat: 35.6654, lng: 139.7124 },
-    { name: '青山一丁目', lat: 35.6726, lng: 139.7147 },
-    { name: '赤坂見附', lat: 35.6797, lng: 139.7363 },
-    { name: '虎ノ門',   lat: 35.6677, lng: 139.7490 },
-    { name: '新橋',     lat: 35.6658, lng: 139.7579 },
-    { name: '銀座',     lat: 35.6715, lng: 139.7649 },
-    { name: '日本橋',   lat: 35.6821, lng: 139.7742 },
-    { name: '神田',     lat: 35.6919, lng: 139.7706 },
-    { name: '上野',     lat: 35.7136, lng: 139.7772 },
-    { name: '浅草',     lat: 35.7116, lng: 139.7971 },
-  ],
-  Marunouchi: [
-    { name: '荻窪',     lat: 35.7058, lng: 139.6193 },
-    { name: '南阿佐ケ谷', lat: 35.7038, lng: 139.6397 },
-    { name: '新高円寺', lat: 35.7046, lng: 139.6524 },
-    { name: '新中野',   lat: 35.7025, lng: 139.6680 },
-    { name: '中野坂上', lat: 35.7017, lng: 139.6658 },
-    { name: '新宿',     lat: 35.6896, lng: 139.7006 },
-    { name: '四谷',     lat: 35.6874, lng: 139.7302 },
-    { name: '赤坂見附', lat: 35.6797, lng: 139.7363 },
-    { name: '国会議事堂前', lat: 35.6746, lng: 139.7430 },
-    { name: '銀座',     lat: 35.6714, lng: 139.7648 },
-    { name: '東京',     lat: 35.6813, lng: 139.7671 },
-    { name: '大手町',   lat: 35.6843, lng: 139.7627 },
-    { name: '御茶ノ水', lat: 35.6980, lng: 139.7657 },
-    { name: '後楽園',   lat: 35.7074, lng: 139.7516 },
-    { name: '茗荷谷',   lat: 35.7209, lng: 139.7294 },
-    { name: '池袋',     lat: 35.7295, lng: 139.7109 },
-  ],
-  Hibiya: [
-    { name: '中目黒',   lat: 35.6441, lng: 139.6988 },
-    { name: '恵比寿',   lat: 35.6470, lng: 139.7103 },
-    { name: '広尾',     lat: 35.6520, lng: 139.7215 },
-    { name: '六本木',   lat: 35.6627, lng: 139.7311 },
-    { name: '銀座',     lat: 35.6714, lng: 139.7647 },
-    { name: '秋葉原',   lat: 35.6983, lng: 139.7731 },
-    { name: '北千住',   lat: 35.7489, lng: 139.8002 },
-  ],
-  Tozai: [
-    { name: '中野',     lat: 35.7075, lng: 139.6641 },
-    { name: '高田馬場', lat: 35.7124, lng: 139.7039 },
-    { name: '飯田橋',   lat: 35.7020, lng: 139.7487 },
-    { name: '大手町',   lat: 35.6843, lng: 139.7625 },
-    { name: '茅場町',   lat: 35.6796, lng: 139.7796 },
-    { name: '木場',     lat: 35.6717, lng: 139.8038 },
-    { name: '西船橋',   lat: 35.7034, lng: 139.9483 },
-  ],
-  Chiyoda: [
-    { name: '代々木上原', lat: 35.6620, lng: 139.6858 },
-    { name: '表参道',   lat: 35.6653, lng: 139.7123 },
-    { name: '国会議事堂前', lat: 35.6746, lng: 139.7430 },
-    { name: '大手町',   lat: 35.6843, lng: 139.7627 },
-    { name: '北千住',   lat: 35.7489, lng: 139.8002 },
-    { name: '綾瀬',     lat: 35.7596, lng: 139.8247 },
-  ],
-  Yurakucho: [
-    { name: '和光市',   lat: 35.7843, lng: 139.6066 },
-    { name: '小竹向原', lat: 35.7419, lng: 139.6756 },
-    { name: '池袋',     lat: 35.7295, lng: 139.7109 },
-    { name: '飯田橋',   lat: 35.7020, lng: 139.7487 },
-    { name: '有楽町',   lat: 35.6749, lng: 139.7630 },
-    { name: '新木場',   lat: 35.6325, lng: 139.8232 },
-  ],
-  Hanzomon: [
-    { name: '渋谷',     lat: 35.6580, lng: 139.7025 },
-    { name: '表参道',   lat: 35.6654, lng: 139.7124 },
-    { name: '半蔵門',   lat: 35.6838, lng: 139.7450 },
-    { name: '大手町',   lat: 35.6843, lng: 139.7627 },
-    { name: '水天宮前', lat: 35.6799, lng: 139.7855 },
-    { name: '押上',     lat: 35.7102, lng: 139.8014 },
-  ],
-  Namboku: [
-    { name: '目黒',     lat: 35.6333, lng: 139.7158 },
-    { name: '白金台',   lat: 35.6390, lng: 139.7247 },
-    { name: '麻布十番', lat: 35.6543, lng: 139.7374 },
-    { name: '溜池山王', lat: 35.6742, lng: 139.7424 },
-    { name: '永田町',   lat: 35.6783, lng: 139.7427 },
-    { name: '後楽園',   lat: 35.7074, lng: 139.7516 },
-    { name: '駒込',     lat: 35.7365, lng: 139.7483 },
-    { name: '王子',     lat: 35.7516, lng: 139.7374 },
-    { name: '赤羽岩淵', lat: 35.7794, lng: 139.7238 },
-  ],
-  Fukutoshin: [
-    { name: '和光市',   lat: 35.7843, lng: 139.6066 },
-    { name: '小竹向原', lat: 35.7419, lng: 139.6756 },
-    { name: '池袋',     lat: 35.7295, lng: 139.7109 },
-    { name: '新宿三丁目', lat: 35.6882, lng: 139.7068 },
-    { name: '渋谷',     lat: 35.6580, lng: 139.7025 },
-  ],
+  'YokohamaMunicipal.Blue':  { name: '横浜ブルーライン',  color: '#2B7BB9' },
+  'YokohamaMunicipal.Green': { name: '横浜グリーンライン', color: '#009B74' },
 };
 
 // ════════════════════════════════════════════════════════════
@@ -224,20 +80,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 // ════════════════════════════════════════════════════════════
 // 状態
 // ════════════════════════════════════════════════════════════
-let trainMarkers = [];
-let railwayLayers = [];
-let refreshTimer  = null;
-let apiKey        = '';
-let demoTimer     = null;
-
-// デモアニメーション用
-const SEGMENT_DURATION_MS = 20000; // 1駅間の標準通過時間(ms)
-let demoTrains       = [];
-let animationFrameId = null;
-let lastAnimTime     = null;
-
-// 実データアニメーション用
-let realTrains        = new Map(); // trainNo → state
+let trainMarkers   = [];
+let railwayLayers  = [];
+let refreshTimer   = null;
+let realTrains     = new Map(); // trainId → state
 let realAnimFrameId   = null;
 let realLastAnimTime  = null;
 
@@ -251,9 +97,6 @@ function updateStatus(text, color = '#aaa') {
 }
 
 function clearTrainMarkers() {
-  if (animationFrameId) { cancelAnimationFrame(animationFrameId); animationFrameId = null; }
-  lastAnimTime = null;
-  demoTrains = [];
   if (realAnimFrameId) { cancelAnimationFrame(realAnimFrameId); realAnimFrameId = null; }
   realLastAnimTime = null;
   realTrains.clear();
@@ -261,8 +104,8 @@ function clearTrainMarkers() {
   trainMarkers = [];
 }
 
-function getLineCode(odptId) {
-  const m = odptId.match(/odpt\.Train:(\w+)\.(\w+)\./);
+function getLineCode(trainId) {
+  const m = trainId.match(/odpt\.Train:(\w+)\.(\w+)\./);
   if (!m) return null;
   const [, operator, line] = m;
   return operator === 'TokyoMetro' ? line : `${operator}.${line}`;
@@ -282,222 +125,18 @@ function createDotIcon(color) {
   });
 }
 
-function placeTrainMarker({ lat, lng, lineName, lineColor, trainNo, stationName, destName, delay }) {
-  const marker = L.marker([lat, lng], { icon: createDotIcon(lineColor) });
-  marker.bindPopup(`
-    <div style="font-size:13px;line-height:1.9;min-width:160px">
-      <b style="color:${lineColor}">${lineName}</b><br>
-      列車番号: <b>${trainNo}</b><br>
-      現在位置: ${stationName}<br>
-      行先: ${destName}<br>
-      遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
-    </div>
-  `);
-  marker.addTo(map);
-  trainMarkers.push(marker);
-}
-
 // ════════════════════════════════════════════════════════════
-// B. 路線ラインを描画（DEMO_STATIONS の座標を順につなぐ）
+// 路線ライン描画（APIデータ使用）
 // ════════════════════════════════════════════════════════════
-function drawRailwayLines() {
-  railwayLayers.forEach(l => map.removeLayer(l));
-  railwayLayers = [];
-
-  for (const [code, stations] of Object.entries(DEMO_STATIONS)) {
-    const color   = LINES[code].color;
-    const latlngs = stations.map(s => [s.lat, s.lng]);
-    const poly = L.polyline(latlngs, {
-      color,
-      weight: 4,
-      opacity: 0.75,
-    }).addTo(map);
-    railwayLayers.push(poly);
-  }
-
-  updateStatus('APIキーを入力するか「デモモード」を押してください');
-}
-
-// ════════════════════════════════════════════════════════════
-// A. デモモード（リアルタイムアニメーション）
-// ════════════════════════════════════════════════════════════
-const DEMO_TRAIN_LETTERS = { Ginza:'G', Marunouchi:'M', Hibiya:'H', Tozai:'T',
-  Chiyoda:'C', Yurakucho:'Y', Hanzomon:'Z', Namboku:'N', Fukutoshin:'F' };
-
-/**
- * fromIdx → toIdx 間を progress(0-1) で補間した座標を返す
- * 実APIモードと同じ「駅A → 駅B」セグメント方式
- */
-function getTrainInterpolatedPos(train) {
-  const stations = DEMO_STATIONS[train.code];
-  const from = stations[train.fromIdx];
-  const to   = stations[train.toIdx];
-  const t    = train.progress;
-  return {
-    lat:      from.lat + (to.lat - from.lat) * t,
-    lng:      from.lng + (to.lng - from.lng) * t,
-    fromName: from.name,
-    toName:   to.name,
-  };
-}
-
-function updateDemoTrainPopup(train) {
-  const line     = LINES[train.code];
-  const stations = DEMO_STATIONS[train.code];
-  const pos      = getTrainInterpolatedPos(train);
-  const destName = train.forward
-    ? stations[stations.length - 1].name
-    : stations[0].name;
-  train.marker.setPopupContent(`
-    <div style="font-size:13px;line-height:1.9;min-width:160px">
-      <b style="color:${line.color}">${line.name}</b><br>
-      列車番号: <b>${train.trainNo}</b><br>
-      現在位置: ${pos.fromName} → ${pos.toName}<br>
-      行先: ${destName}<br>
-      遅延: ${train.delay > 0 ? `<span style="color:#e00">${train.delay}秒</span>` : 'なし'}
-    </div>
-  `);
-}
-
-function advanceDemoTrain(train, dt) {
-  const stations = DEMO_STATIONS[train.code];
-  const n = stations.length;
-  train.progress += dt / (SEGMENT_DURATION_MS * train.speedFactor);
-
-  while (train.progress >= 1) {
-    train.progress -= 1;
-    // 次の区間へ進む
-    if (train.forward) {
-      train.fromIdx = train.toIdx;
-      train.toIdx   = train.fromIdx + 1;
-      if (train.toIdx >= n) {           // 終端に到達 → 折り返し
-        train.forward  = false;
-        train.toIdx    = train.fromIdx - 1;
-      }
-    } else {
-      train.fromIdx = train.toIdx;
-      train.toIdx   = train.fromIdx - 1;
-      if (train.toIdx < 0) {            // 始端に到達 → 折り返し
-        train.forward = true;
-        train.toIdx   = train.fromIdx + 1;
-      }
-    }
-    updateDemoTrainPopup(train);
-  }
-}
-
-function runDemoAnimation(timestamp) {
-  if (lastAnimTime === null) lastAnimTime = timestamp;
-  const dt = Math.min(timestamp - lastAnimTime, 200); // タブ復帰時の跳び防止
-  lastAnimTime = timestamp;
-
-  for (const train of demoTrains) {
-    advanceDemoTrain(train, dt);
-    const pos = getTrainInterpolatedPos(train);
-    train.marker.setLatLng([pos.lat, pos.lng]);
-  }
-  animationFrameId = requestAnimationFrame(runDemoAnimation);
-}
-
-function makeDemoTrains() {
-  clearTrainMarkers();
-  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
-
-  for (const [code, stations] of Object.entries(DEMO_STATIONS)) {
-    const line   = LINES[code];
-    const letter = DEMO_TRAIN_LETTERS[code];
-
-    // 各路線に 2〜3 本配置
-    const count = 2 + Math.floor(Math.random() * 2);
-    for (let i = 0; i < count; i++) {
-      const forward = Math.random() > 0.5;
-      const n = stations.length;
-      // forward: fromIdx は 0〜n-2、backward: fromIdx は 1〜n-1
-      const fromIdx = forward
-        ? Math.floor(Math.random() * (n - 1))
-        : 1 + Math.floor(Math.random() * (n - 1));
-      const toIdx = forward ? fromIdx + 1 : fromIdx - 1;
-      const progress    = Math.random(); // 区間内のランダム初期位置
-      const speedFactor = 0.8 + Math.random() * 0.4; // ±20% の速度ばらつき
-      const trainNo     = `${letter}${String(100 + Math.floor(Math.random() * 200)).padStart(3,'0')}S`;
-      const delay       = Math.random() < 0.15 ? 60 + Math.floor(Math.random() * 120) : 0;
-
-      const train = { code, fromIdx, toIdx, forward, progress, speedFactor, trainNo, delay, marker: null };
-      const pos   = getTrainInterpolatedPos(train);
-      const destName = forward ? stations[n - 1].name : stations[0].name;
-
-      const marker = L.marker([pos.lat, pos.lng], { icon: createDotIcon(line.color) });
-      marker.bindPopup(`
-        <div style="font-size:13px;line-height:1.9;min-width:160px">
-          <b style="color:${line.color}">${line.name}</b><br>
-          列車番号: <b>${trainNo}</b><br>
-          現在位置: ${pos.fromName} → ${pos.toName}<br>
-          行先: ${destName}<br>
-          遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
-        </div>
-      `);
-      marker.addTo(map);
-      trainMarkers.push(marker);
-      train.marker = marker;
-      demoTrains.push(train);
-    }
-  }
-
-  // アニメーション開始
-  lastAnimTime = null;
-  animationFrameId = requestAnimationFrame(runDemoAnimation);
-
-  const now = new Date().toLocaleTimeString('ja-JP');
-  updateStatus(`[デモ] ${demoTrains.length}本 リアルタイム走行中 ｜ ${now}`, '#7c5cbf');
-
-  // ステータスを定期更新（電車は止めない）
-  demoTimer = setInterval(() => {
-    const t = new Date().toLocaleTimeString('ja-JP');
-    updateStatus(`[デモ] ${demoTrains.length}本 リアルタイム走行中 ｜ ${t}`, '#7c5cbf');
-  }, 10000);
-}
-
-function startDemo() {
-  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-  document.getElementById('load-btn').disabled = false;
-  document.getElementById('load-btn').textContent = '読み込む';
-  apiKey = '';
-  makeDemoTrains();
-}
-
-// ════════════════════════════════════════════════════════════
-// ODPT API（実データ）
-// ════════════════════════════════════════════════════════════
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-  return res.json();
-}
-
-async function fetchRailways(key) {
-  const operators = ['TokyoMetro', 'Toei', 'YokohamaMunicipal'];
-  const responses = await Promise.allSettled(
-    operators.map(op =>
-      fetchJSON(`https://api.odpt.org/api/v4/odpt:Railway?odpt:operator=odpt.Operator:${op}&acl:consumerKey=${encodeURIComponent(key)}`)
-    )
-  );
-  const result = [];
-  for (const res of responses) {
-    if (res.status === 'fulfilled') result.push(...res.value);
-  }
-  return result;
-}
-
-function drawRealRailwayLines(railways, stationMap) {
+function drawRailwayLines(railways, stationMap) {
   railwayLayers.forEach(l => map.removeLayer(l));
   railwayLayers = [];
 
   for (const railway of railways) {
     const rwId = railway['owl:sameAs'] || '';
-    // odpt.Railway:Toei.Asakusa → Toei.Asakusa
-    const m = rwId.match(/odpt\.Railway:(?:TokyoMetro\.(\w+)|(\w+)\.(\w+))/);
+    const m = rwId.match(/odpt\.Railway:(\w+)\.(\w+)/);
     if (!m) continue;
-    const code = m[1] || `${m[2]}.${m[3]}`;
+    const code = `${m[1]}.${m[2]}`;
     const line = LINES[code];
     if (!line) continue;
 
@@ -506,92 +145,73 @@ function drawRealRailwayLines(railways, stationMap) {
 
     const latlngs = order
       .sort((a, b) => (a['odpt:index'] || 0) - (b['odpt:index'] || 0))
-      .map(entry => stationMap[entry['odpt:station']])
+      .map(e => stationMap[e['odpt:station']])
       .filter(Boolean)
       .map(s => [s.lat, s.lng]);
 
     if (latlngs.length < 2) continue;
 
-    const poly = L.polyline(latlngs, {
-      color: line.color,
-      weight: 4,
-      opacity: 0.75,
-    }).addTo(map);
-    railwayLayers.push(poly);
+    railwayLayers.push(
+      L.polyline(latlngs, { color: line.color, weight: 4, opacity: 0.75 }).addTo(map)
+    );
   }
 }
 
-async function fetchStations(key) {
-  const operators = ['TokyoMetro', 'Toei', 'YokohamaMunicipal'];
-  const responses = await Promise.allSettled(
-    operators.map(op =>
-      fetchJSON(`https://api.odpt.org/api/v4/odpt:Station?odpt:operator=odpt.Operator:${op}&acl:consumerKey=${encodeURIComponent(key)}`)
-    )
-  );
-  const result = {};
-  for (const res of responses) {
-    if (res.status !== 'fulfilled') continue;
-    for (const s of res.value) {
-      const id  = s['owl:sameAs'];
-      const lat = s['geo:lat'];
-      const lng = s['geo:long'];
-      if (id && lat != null && lng != null) {
-        result[id] = { lat, lng, name: s['dc:title'] || id.split('.').pop() };
-      }
-    }
-  }
-  console.log(`[ODPT] 駅データ: 座標あり=${Object.keys(result).length}件`);
-  return result;
-}
-
-async function fetchTrains(key) {
-  return fetchJSON(
-    `https://api.odpt.org/api/v4/odpt:Train?acl:consumerKey=${encodeURIComponent(key)}`
-  );
-}
-
-// 実データ用アニメーションループ（fromStation→toStation を60秒かけて移動）
-function runRealAnimation(timestamp) {
+// ════════════════════════════════════════════════════════════
+// アニメーションループ
+// ════════════════════════════════════════════════════════════
+function runAnimation(timestamp) {
   if (realLastAnimTime === null) realLastAnimTime = timestamp;
-  // タブ非表示やスリープ復帰後の巨大 dt を抑制（最大1フレーム分 = 50ms）
   const dt = Math.min(timestamp - realLastAnimTime, 50);
   realLastAnimTime = timestamp;
+
   for (const [, t] of realTrains) {
-    if (t.progress >= 1) continue; // 到着済みは動かさない
+    if (t.progress >= 1) continue;
     t.progress = Math.min(1, t.progress + dt / 60000);
-    const lat = t.fromLat + (t.toLat - t.fromLat) * t.progress;
-    const lng = t.fromLng + (t.toLng - t.fromLng) * t.progress;
-    t.marker.setLatLng([lat, lng]);
+    t.marker.setLatLng([
+      t.fromLat + (t.toLat - t.fromLat) * t.progress,
+      t.fromLng + (t.toLng - t.fromLng) * t.progress,
+    ]);
   }
-  realAnimFrameId = requestAnimationFrame(runRealAnimation);
+  realAnimFrameId = requestAnimationFrame(runAnimation);
 }
 
+// ════════════════════════════════════════════════════════════
+// API 呼び出し（サーバーサイドで API キーを付与）
+// ════════════════════════════════════════════════════════════
+async function fetchJSON(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+// ════════════════════════════════════════════════════════════
+// 列車データ更新
+// ════════════════════════════════════════════════════════════
 async function refresh(stationMap) {
   try {
-    const trains = await fetchTrains(apiKey);
+    const trains = await fetchJSON('/api/trains');
 
-    // API が 0 件を返した場合はネットワーク一時エラーの可能性があるため既存マーカーを保持
     if (trains.length === 0) {
       const now = new Date().toLocaleTimeString('ja-JP');
-      updateStatus(`列車データなし ｜ ${now} ｜ APIキーのアクセス権または運行時間をご確認ください`, '#FF9500');
+      updateStatus(`列車データなし ｜ ${now} ｜ 運行時間外の可能性があります`, '#FF9500');
       return;
     }
 
     const activeIds = new Set();
-    let skippedNoStation = 0;
+    let skipped = 0;
 
     for (const train of trains) {
-      // owl:sameAs を一意キーとして使用（trainNumber は null や重複あり）
       const trainId = train['owl:sameAs'];
       if (!trainId) continue;
 
       const fromId = train['odpt:fromStation'] || null;
       const toId   = train['odpt:toStation']   || null;
-      if (!fromId && !toId) { skippedNoStation++; continue; }
+      if (!fromId && !toId) { skipped++; continue; }
 
       const fromSt = fromId ? stationMap[fromId] : null;
       const toSt   = toId   ? stationMap[toId]   : null;
-      if (!fromSt && !toSt) { skippedNoStation++; continue; }
+      if (!fromSt && !toSt) { skipped++; continue; }
 
       const code     = getLineCode(trainId);
       const line     = LINES[code] || { name: code || '不明', color: '#666' };
@@ -601,17 +221,14 @@ async function refresh(stationMap) {
       const destId   = destArr?.at(-1);
       const destName = destId ? (stationMap[destId]?.name || destId.split('.').pop()) : '不明';
 
-      // fromStation が不明の場合は座標をそろえない（ゼロ移動を避ける）
-      const fromLat  = fromSt ? fromSt.lat : toSt.lat;
-      const fromLng  = fromSt ? fromSt.lng : toSt.lng;
-      const toLat    = toSt   ? toSt.lat   : fromSt.lat;
-      const toLng    = toSt   ? toSt.lng   : fromSt.lng;
-      const nearName = fromSt ? fromSt.name : toSt.name;
-      const toName   = toSt   ? toSt.name   : nearName;
+      const fromLat = fromSt ? fromSt.lat : toSt.lat;
+      const fromLng = fromSt ? fromSt.lng : toSt.lng;
+      const toLat   = toSt   ? toSt.lat   : fromSt.lat;
+      const toLng   = toSt   ? toSt.lng   : fromSt.lng;
       const hasMovement = (fromLat !== toLat || fromLng !== toLng);
 
-      activeIds.add(trainId);
-      const existing = realTrains.get(trainId);
+      const nearName = fromSt ? fromSt.name : toSt.name;
+      const toName   = toSt   ? toSt.name   : nearName;
 
       const popupHtml = `
         <div style="font-size:13px;line-height:1.9;min-width:160px">
@@ -622,31 +239,30 @@ async function refresh(stationMap) {
           遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
         </div>`;
 
+      activeIds.add(trainId);
+      const existing = realTrains.get(trainId);
+
       if (existing) {
         if (existing.fromId !== fromId || existing.toId !== toId) {
-          // 区間が変わった → 現在地から新 toStation へアニメーション継続
+          // 区間変化 → 現在地から新 toStation へ継続
           const curLat = existing.fromLat + (existing.toLat - existing.fromLat) * existing.progress;
           const curLng = existing.fromLng + (existing.toLng - existing.fromLng) * existing.progress;
           existing.fromLat = curLat; existing.fromLng = curLng;
-          existing.toLat   = toLat;  existing.toLng   = toLng;
-          existing.fromId  = fromId; existing.toId    = toId;
+          existing.toLat = toLat;    existing.toLng = toLng;
+          existing.fromId = fromId;  existing.toId = toId;
           existing.progress = 0;
           existing.marker.setLatLng([curLat, curLng]);
           existing.marker.setPopupContent(popupHtml);
         } else if (existing.progress >= 1 && hasMovement) {
-          // 同じ区間だがアニメーション完了済み → 再アニメーション
-          // （実際の駅間時間より速く到着してしまった場合）
+          // 同区間・到着済み → 再アニメーション
           existing.fromLat = fromLat; existing.fromLng = fromLng;
-          existing.toLat   = toLat;   existing.toLng   = toLng;
+          existing.toLat = toLat;     existing.toLng = toLng;
           existing.progress = 0;
           existing.marker.setLatLng([fromLat, fromLng]);
           existing.marker.setPopupContent(popupHtml);
         }
-        // 同一区間・進行中 → progress をそのまま継続
       } else {
-        // 新規列車: fromStation 不明でゼロ移動になる場合はスキップ
-        // （次回リフレッシュで区間確定してから追加）
-        if (!hasMovement) continue;
+        if (!hasMovement) continue; // from=to の新規列車はスキップ
         const marker = L.marker([fromLat, fromLng], { icon: createDotIcon(line.color) });
         marker.bindPopup(popupHtml);
         marker.addTo(map);
@@ -655,7 +271,7 @@ async function refresh(stationMap) {
       }
     }
 
-    // 今回のデータに含まれない列車を除去
+    // 消えた列車を除去
     for (const [id, t] of realTrains) {
       if (!activeIds.has(id)) {
         map.removeLayer(t.marker);
@@ -664,75 +280,58 @@ async function refresh(stationMap) {
       }
     }
 
-    // アニメーションループが止まっている場合のみ再起動
     if (!realAnimFrameId) {
       realLastAnimTime = null;
-      realAnimFrameId = requestAnimationFrame(runRealAnimation);
+      realAnimFrameId = requestAnimationFrame(runAnimation);
     }
 
     const now = new Date().toLocaleTimeString('ja-JP');
-    if (realTrains.size === 0) {
-      updateStatus(`列車データ${trains.length}件取得も駅IDが一致せず表示できません ｜ ${now}`, '#FF9500');
-    } else {
-      updateStatus(`${realTrains.size}本運行中 ｜ 最終更新: ${now}`, '#4CAF50');
-    }
+    updateStatus(
+      realTrains.size === 0
+        ? `列車データ${trains.length}件取得も駅IDが一致せず ｜ ${now}`
+        : `${realTrains.size}本運行中 ｜ 最終更新: ${now}`,
+      realTrains.size === 0 ? '#FF9500' : '#4CAF50'
+    );
   } catch (e) {
     updateStatus('取得エラー: ' + e.message, '#FF5555');
     console.error(e);
   }
 }
 
+// ════════════════════════════════════════════════════════════
+// 初期ロード
+// ════════════════════════════════════════════════════════════
 async function loadData() {
-  apiKey = document.getElementById('api-key-input').value.trim();
-  if (!apiKey) {
-    updateStatus('APIキーを入力してください', '#FF9500');
-    return;
-  }
-  // デモ停止
-  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
   clearTrainMarkers();
-
-  const btn = document.getElementById('load-btn');
-  btn.disabled = true;
-  updateStatus('駅データ取得中...', '#4CAF50');
+  updateStatus('データ取得中...', '#4CAF50');
 
   try {
     const [stationMap, railways] = await Promise.all([
-      fetchStations(apiKey),
-      fetchRailways(apiKey),
+      fetchJSON('/api/stations'),
+      fetchJSON('/api/railways'),
     ]);
+
     if (Object.keys(stationMap).length === 0) {
-      updateStatus('駅データが取得できませんでした。APIキーを確認してください', '#FF5555');
-      btn.disabled = false;
-      btn.textContent = '読み込む';
+      updateStatus('駅データが取得できませんでした', '#FF5555');
       return;
     }
-    if (railways.length > 0) {
-      drawRealRailwayLines(railways, stationMap);
-    }
-    updateStatus('列車データ取得中...', '#4CAF50');
+
+    drawRailwayLines(railways, stationMap);
     await refresh(stationMap);
+
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(() => refresh(stationMap), 30000);
-    btn.textContent = '更新中(30s)';
   } catch (e) {
     updateStatus('エラー: ' + e.message, '#FF5555');
     console.error(e);
-    btn.disabled = false;
-    btn.textContent = '読み込む';
   }
 }
-
-document.getElementById('api-key-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') loadData();
-});
 
 // ════════════════════════════════════════════════════════════
 // 凡例
 // ════════════════════════════════════════════════════════════
 const legendEl = document.getElementById('legend');
 const legendGroups = [
-  { title: '東京メトロ', keys: ['Ginza','Marunouchi','Hibiya','Tozai','Chiyoda','Yurakucho','Hanzomon','Namboku','Fukutoshin'] },
   { title: '都営地下鉄', keys: ['Toei.Asakusa','Toei.Mita','Toei.Shinjuku','Toei.Oedo'] },
   { title: '横浜市営地下鉄', keys: ['YokohamaMunicipal.Blue','YokohamaMunicipal.Green'] },
 ];
@@ -744,10 +343,7 @@ legendEl.innerHTML = legendGroups.map(g =>
   }).join('')
 ).join('');
 
-// ════════════════════════════════════════════════════════════
-// 起動時に路線ラインを描画
-// ════════════════════════════════════════════════════════════
-drawRailwayLines();
+window.addEventListener('DOMContentLoaded', loadData);
 </script>
 </body>
 </html>
