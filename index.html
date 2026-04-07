@@ -485,7 +485,7 @@ async function fetchStations(key) {
 
 async function fetchTrains(key) {
   return fetchJSON(
-    `https://api.odpt.org/api/v4/odpt:Train?odpt:operator=odpt.Operator:TokyoMetro&acl:consumerKey=${encodeURIComponent(key)}`
+    `https://api.odpt.org/api/v4/odpt:Train?acl:consumerKey=${encodeURIComponent(key)}`
   );
 }
 
@@ -507,6 +507,10 @@ async function refresh(stationMap) {
   try {
     const trains = await fetchTrains(apiKey);
     console.log(`[ODPT] 列車データ: API=${trains.length}件, 駅マップ=${Object.keys(stationMap).length}件`);
+    if (trains.length > 0) {
+      const operators = [...new Set(trains.map(t => t['odpt:operator']).filter(Boolean))];
+      console.log('[ODPT] 取得できたオペレータ:', operators);
+    }
     const activeNos = new Set();
     let skippedNoStation = 0;
 
