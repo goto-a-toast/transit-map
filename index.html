@@ -476,6 +476,10 @@ async function fetchStations(key) {
       result[id] = { lat, lng, name: s['dc:title'] || id.split('.').pop() };
     }
   }
+  console.log(`[ODPT] 駅データ: API=${data.length}件, 座標あり=${Object.keys(result).length}件`);
+  if (Object.keys(result).length === 0 && data.length > 0) {
+    console.warn('[ODPT] 駅データに座標(geo:lat/geo:long)が含まれていません。APIレスポンス例:', data[0]);
+  }
   return result;
 }
 
@@ -502,15 +506,17 @@ function runRealAnimation(timestamp) {
 async function refresh(stationMap) {
   try {
     const trains = await fetchTrains(apiKey);
+    console.log(`[ODPT] 列車データ: API=${trains.length}件, 駅マップ=${Object.keys(stationMap).length}件`);
     const activeNos = new Set();
+    let skippedNoStation = 0;
 
     for (const train of trains) {
       const fromId = train['odpt:fromStation'];
       const toId   = train['odpt:toStation'];
-      if (!fromId && !toId) continue;
+      if (!fromId && !toId) { skippedNoStation++; continue; }
       const fromSt = fromId ? stationMap[fromId] : null;
       const toSt   = toId   ? stationMap[toId]   : null;
-      if (!fromSt && !toSt) continue;
+      if (!fromSt && !toSt) { skippedNoStation++; continue; }
 
       const code    = getLineCode(train['owl:sameAs'] || '');
       const line    = LINES[code] || { name: code || '不明', color: '#666' };
@@ -567,8 +573,17 @@ async function refresh(stationMap) {
     realLastAnimTime = null;
     realAnimFrameId = requestAnimationFrame(runRealAnimation);
 
+    console.log(`[ODPT] 表示: ${realTrains.size}本, スキップ: ${skippedNoStation}本`);
     const now = new Date().toLocaleTimeString('ja-JP');
-    updateStatus(`${realTrains.size}本運行中 ｜ 最終更新: ${now}`, '#4CAF50');
+    if (realTrains.size === 0) {
+      if (trains.length === 0) {
+        updateStatus(`列車データなし ｜ ${now} ｜ APIキーのアクセス権または運行時間をご確認ください`, '#FF9500');
+      } else {
+        updateStatus(`列車データ${trains.length}件取得も駅IDが一致せず表示できません ｜ ${now}`, '#FF9500');
+      }
+    } else {
+      updateStatus(`${realTrains.size}本運行中 ｜ 最終更新: ${now}`, '#4CAF50');
+    }
   } catch (e) {
     updateStatus('取得エラー: ' + e.message, '#FF5555');
     console.error(e);
@@ -591,6 +606,12 @@ async function loadData() {
 
   try {
     const stationMap = await fetchStations(apiKey);
+    if (Object.keys(stationMap).length === 0) {
+      updateStatus('駅データが取得できませんでした。APIキーを確認してください', '#FF5555');
+      btn.disabled = false;
+      btn.textContent = '読み込む';
+      return;
+    }
     updateStatus('列車データ取得中...', '#4CAF50');
     await refresh(stationMap);
     if (refreshTimer) clearInterval(refreshTimer);
