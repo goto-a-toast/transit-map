@@ -550,7 +550,7 @@ async function fetchTrains(key) {
   );
 }
 
-// 実データ用アニメーションループ（fromStation→toStation を20秒かけて移動）
+// 実データ用アニメーションループ（fromStation→toStation を60秒かけて移動）
 function runRealAnimation(timestamp) {
   if (realLastAnimTime === null) realLastAnimTime = timestamp;
   // タブ非表示やスリープ復帰後の巨大 dt を抑制（最大1フレーム分 = 50ms）
@@ -558,7 +558,7 @@ function runRealAnimation(timestamp) {
   realLastAnimTime = timestamp;
   for (const [, t] of realTrains) {
     if (t.progress >= 1) continue; // 到着済みは動かさない
-    t.progress = Math.min(1, t.progress + dt / 20000);
+    t.progress = Math.min(1, t.progress + dt / 60000);
     const lat = t.fromLat + (t.toLat - t.fromLat) * t.progress;
     const lng = t.fromLng + (t.toLng - t.fromLng) * t.progress;
     t.marker.setLatLng([lat, lng]);
@@ -601,17 +601,30 @@ async function refresh(stationMap) {
       const destId   = destArr?.at(-1);
       const destName = destId ? (stationMap[destId]?.name || destId.split('.').pop()) : '不明';
 
-      const fromLat  = (fromSt || toSt).lat, fromLng = (fromSt || toSt).lng;
-      const toLat    = (toSt   || fromSt).lat, toLng  = (toSt   || fromSt).lng;
+      // fromStation が不明の場合は座標をそろえない（ゼロ移動を避ける）
+      const fromLat  = fromSt ? fromSt.lat : toSt.lat;
+      const fromLng  = fromSt ? fromSt.lng : toSt.lng;
+      const toLat    = toSt   ? toSt.lat   : fromSt.lat;
+      const toLng    = toSt   ? toSt.lng   : fromSt.lng;
       const nearName = fromSt ? fromSt.name : toSt.name;
       const toName   = toSt   ? toSt.name   : nearName;
+      const hasMovement = (fromLat !== toLat || fromLng !== toLng);
 
       activeIds.add(trainId);
       const existing = realTrains.get(trainId);
 
+      const popupHtml = `
+        <div style="font-size:13px;line-height:1.9;min-width:160px">
+          <b style="color:${line.color}">${line.name}</b><br>
+          列車番号: <b>${trainNo}</b><br>
+          現在位置: ${nearName} → ${toName}<br>
+          行先: ${destName}<br>
+          遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
+        </div>`;
+
       if (existing) {
         if (existing.fromId !== fromId || existing.toId !== toId) {
-          // 区間が変わった → 現在地から新toStation へアニメーション継続
+          // 区間が変わった → 現在地から新 toStation へアニメーション継続
           const curLat = existing.fromLat + (existing.toLat - existing.fromLat) * existing.progress;
           const curLng = existing.fromLng + (existing.toLng - existing.fromLng) * existing.progress;
           existing.fromLat = curLat; existing.fromLng = curLng;
@@ -619,29 +632,23 @@ async function refresh(stationMap) {
           existing.fromId  = fromId; existing.toId    = toId;
           existing.progress = 0;
           existing.marker.setLatLng([curLat, curLng]);
-          existing.marker.setPopupContent(`
-            <div style="font-size:13px;line-height:1.9;min-width:160px">
-              <b style="color:${line.color}">${line.name}</b><br>
-              列車番号: <b>${trainNo}</b><br>
-              現在位置: ${nearName} → ${toName}<br>
-              行先: ${destName}<br>
-              遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
-            </div>
-          `);
+          existing.marker.setPopupContent(popupHtml);
+        } else if (existing.progress >= 1 && hasMovement) {
+          // 同じ区間だがアニメーション完了済み → 再アニメーション
+          // （実際の駅間時間より速く到着してしまった場合）
+          existing.fromLat = fromLat; existing.fromLng = fromLng;
+          existing.toLat   = toLat;   existing.toLng   = toLng;
+          existing.progress = 0;
+          existing.marker.setLatLng([fromLat, fromLng]);
+          existing.marker.setPopupContent(popupHtml);
         }
-        // 同じ区間 → progress をそのまま継続
+        // 同一区間・進行中 → progress をそのまま継続
       } else {
-        // 新規列車
+        // 新規列車: fromStation 不明でゼロ移動になる場合はスキップ
+        // （次回リフレッシュで区間確定してから追加）
+        if (!hasMovement) continue;
         const marker = L.marker([fromLat, fromLng], { icon: createDotIcon(line.color) });
-        marker.bindPopup(`
-          <div style="font-size:13px;line-height:1.9;min-width:160px">
-            <b style="color:${line.color}">${line.name}</b><br>
-            列車番号: <b>${trainNo}</b><br>
-            現在位置: ${nearName} → ${toName}<br>
-            行先: ${destName}<br>
-            遅延: ${delay > 0 ? `<span style="color:#e00">${delay}秒</span>` : 'なし'}
-          </div>
-        `);
+        marker.bindPopup(popupHtml);
         marker.addTo(map);
         trainMarkers.push(marker);
         realTrains.set(trainId, { marker, fromId, toId, fromLat, fromLng, toLat, toLng, progress: 0 });
